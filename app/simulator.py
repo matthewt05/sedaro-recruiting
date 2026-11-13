@@ -4,6 +4,7 @@ from functools import reduce
 from operator import __or__
 import subprocess
 import json
+import math
 
 from modsim import agents
 from store import QRangeStore
@@ -41,9 +42,10 @@ class Simulator:
     def __init__(self, store: QRangeStore, init: dict):
         # NOTE: Creating a Simulator object does all the simulation "building"
         self.store = store
-        store[-999999999, 0] = init
         self.init = init
         self.times = {agentId: state["time"] for agentId, state in init.items()}
+        initial_time = min(self.times.values(), default=0)
+        store[math.nextafter(initial_time, -math.inf), initial_time] = init
         self.sim_graph = {}
         for (agentId, sms) in agents.items():
             agent = []
@@ -155,12 +157,54 @@ class Simulator:
                 raise Exception(f"Tuple production not yet implemented")
 
     def simulate(self, iterations: int = 500):
-        """Simulate the universe for a given number of iterations."""
+        """Simulate a fixed number of iterations or through an inclusive end time."""
         for _ in range(iterations):
             for agentId in self.init:
-                t = self.times[agentId]
-                universe = self.read(t - 0.001)
-                if set(universe) == set(self.init):
-                    newState = self.step(agentId, universe)
-                    self.store[t, newState[agentId]["time"]] = newState
-                    self.times[agentId] = newState[agentId]["time"]
+                self._advance_agent(agentId)
+
+    def simulate_until(self, end_time: float):
+        """Advance all agents until they reach end_time, shortening the last step if needed."""
+        if not math.isfinite(end_time):
+            raise ValueError("end_time must be finite.")
+        if not self.times or any(t >= end_time for t in self.times.values()):
+            raise ValueError("end_time must be greater than every agent's start time.")
+
+        while any(t < end_time for t in self.times.values()):
+            advanced = False
+            for agentId in self.init:
+                if self.times[agentId] >= end_time:
+                    continue
+                self._advance_agent(agentId, end_time=end_time)
+                advanced = True
+            if not advanced:
+                raise RuntimeError("Simulation could not advance any agents.")
+
+    def _advance_agent(self, agentId, end_time: float | None = None):
+        t = self.times[agentId]
+        universe = self.read(math.nextafter(t, -math.inf))
+        if set(universe) != set(self.init):
+            if end_time is not None:
+                raise RuntimeError(f"Could not load the complete universe at time {t}.")
+            return
+
+        remaining = None
+        if end_time is not None:
+            remaining = end_time - t
+            previous_time_step = universe[agentId]["timeStep"]
+            time_step = min(previous_time_step, remaining)
+            if not math.isfinite(time_step) or time_step <= 0:
+                raise ValueError("Simulation timestep must remain positive and finite.")
+            if time_step < previous_time_step:
+                universe = {key: dict(state) for key, state in universe.items()}
+                universe[agentId]["timeStep"] = time_step
+
+        new_state = self.step(agentId, universe)
+        new_time = new_state[agentId]["time"]
+        if remaining is not None and universe[agentId]["timeStep"] == remaining:
+            new_time = end_time
+            new_state[agentId]["time"] = end_time
+        if new_time <= t:
+            raise RuntimeError(f"Agent {agentId} did not advance beyond time {t}.")
+
+        self.store[t, new_time] = new_state
+        self.times[agentId] = new_time

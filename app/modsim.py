@@ -30,12 +30,28 @@ def propagate_position(time_step, position, velocity):
 def propagate_mass(mass):
     return mass
 
+def propagate_energy(mass, mass_other, position, position_other, velocity):
+    """Return this body's kinetic energy plus half the pair's potential energy (G = 1)."""
+    r_self = np.array([position['x'], position['y'], position['z']])
+    v_self = np.array([velocity['x'], velocity['y'], velocity['z']])
+    r_other = np.array([position_other['x'], position_other['y'], position_other['z']])
+
+    r = r_self - r_other
+    distance = np.linalg.norm(r)
+    if distance == 0:
+        raise ValueError("Cannot calculate energy for bodies at the same position.")
+
+    kinetic_energy = 0.5 * mass * np.linalg.norm(v_self)**2
+    potential_energy = -0.5 * (mass * mass_other) / distance
+
+    return float(kinetic_energy + potential_energy)
+
 def identity(arg):
     return arg
 
-def timestep_manager(velocity):
+def timestep_manager(time_step):
     """Compute the length of the next simulation timeStep for the agent"""
-    return 100
+    return time_step
 
 def time_manager(time, timeStep):
     """Compute the time for the next simulation step for the agent"""
@@ -57,11 +73,28 @@ agents = {
     'Body1': [
         {
             'consumed': '''(
+                prev!(timeStep),
+                prev!(position),
                 prev!(velocity),
+                agent!(Body2).position,
+                agent!(Body2).mass,
             )''',
             'produced': '''velocity''',
-            'function': identity,
+            'function': propagate_velocity,
         },
+
+        {
+            'consumed': '''(
+                mass,
+                agent!(Body2).mass,
+                position,
+                agent!(Body2).position,
+                velocity,
+            )''',
+            'produced': '''energy''',
+            'function': propagate_energy,
+        },
+
         {
             'consumed': '''(
                 prev!(timeStep),
@@ -71,6 +104,7 @@ agents = {
             'produced': '''position''',
             'function': propagate_position,
         },
+
         {
             'consumed': '''(
                 prev!(mass),
@@ -78,6 +112,7 @@ agents = {
             'produced': '''mass''',
             'function': propagate_mass,
         },
+
         {
             'consumed': '''(
                 prev!(time),
@@ -88,7 +123,7 @@ agents = {
         },
         {
             'consumed': '''(
-                velocity,
+                prev!(timeStep),
             )''',
             'produced': '''timeStep''',
             'function': timestep_manager,
@@ -106,6 +141,19 @@ agents = {
             'produced': '''velocity''',
             'function': propagate_velocity,
         },
+
+        {
+            'consumed': '''(
+                mass,
+                agent!(Body1).mass,
+                position,
+                agent!(Body1).position,
+                velocity,
+            )''',
+            'produced': '''energy''',
+            'function': propagate_energy,
+        },
+
         {
             'consumed': '''(
                 prev!(timeStep),
@@ -132,7 +180,7 @@ agents = {
         },
         {
             'consumed': '''(
-                velocity,
+                prev!(timeStep),
             )''',
             'produced': '''timeStep''',
             'function': timestep_manager,
